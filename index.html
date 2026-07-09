@@ -87,26 +87,46 @@
     }
 
     function startFollowing() {
-      const code = document.getElementById('tripCode').value.trim().toUpperCase();
-      if (!code) return alert("Entre le code");
+  const code = document.getElementById('tripCode').value.trim().toUpperCase();
+  if (!code) return alert("Entre le code");
 
-      if (!map) {
-        map = L.map('map').setView([46.5, 2.2], 9);
-        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
-      }
+  document.getElementById('trackerLog').innerHTML = ""; // reset logs
 
-      db.ref('trips/' + code).on('value', snap => {
-        const d = snap.val();
-        if (!d || !d.lat) return log('trackerLog', 'En attente de position...');
+  if (!map) {
+    map = L.map('map').setView([46.5, 2.2], 9);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
+  }
 
-        log('trackerLog', 'Position reçue !');
+  log('trackerLog', `Écoute du trajet : ${code}`);
 
-        if (!marker) marker = L.marker([d.lat, d.lng]).addTo(map).bindPopup("Ami").openPopup();
-        else marker.setLatLng([d.lat, d.lng]);
+  // Nettoyage ancien listener
+  if (window.currentRef) window.currentRef.off();
 
-        map.setView([d.lat, d.lng], 15);
-      });
+  window.currentRef = db.ref('trips/' + code);
+  
+  window.currentRef.on('value', (snap) => {
+    const d = snap.val();
+    if (!d) {
+      log('trackerLog', "Aucune donnée trouvée pour ce code");
+      return;
     }
+    if (!d.lat || !d.lng) {
+      log('trackerLog', "Données reçues mais pas de position");
+      return;
+    }
+
+    log('trackerLog', `✅ Position reçue ! (${d.lat.toFixed(5)}, ${d.lng.toFixed(5)})`);
+
+    if (!marker) {
+      marker = L.marker([d.lat, d.lng]).addTo(map)
+        .bindPopup("Position de ton ami").openPopup();
+    } else {
+      marker.setLatLng([d.lat, d.lng]);
+    }
+
+    map.setView([d.lat, d.lng], 16);
+  });
+}
 
     function endTrip() {
       if (tripId) db.ref('trips/' + tripId).update({status: 'arrive'});
