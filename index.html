@@ -2,54 +2,119 @@
 <html lang="fr">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Test Minimal</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Suivi Vélo</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-database-compat.js"></script>
+  <style>
+    body { font-family: system-ui, sans-serif; margin:0; padding:10px; background:#f8f9fa; }
+    #map { height: 65vh; border-radius:12px; }
+    button { padding:14px 18px; margin:5px; font-size:17px; border-radius:10px; }
+    .status { padding:12px; background:#d4edda; border-radius:10px; margin:10px 0; }
+    .log { background:#222; color:#0f0; padding:10px; height:160px; overflow-y:auto; font-family:monospace; }
+  </style>
 </head>
 <body>
-  <h1>Test Firebase + Géolocalisation</h1>
-  <button onclick="startTest()">Démarrer Test Cycliste</button>
-  <div id="log" style="margin-top:20px; white-space:pre-wrap; font-family:monospace;"></div>
+  <h1>🚴 Suivi Vélo</h1>
+
+  <button onclick="showSection('sharer')">Je suis le cycliste</button>
+  <button onclick="showSection('tracker')">Suivre mon ami</button>
+
+  <div id="sharer" class="section">
+    <h2>Mode Cycliste</h2>
+    <button onclick="startTrip()">🚀 Top Départ</button>
+    <button onclick="endTrip()">🏁 Arrivée</button>
+    <button onclick="reportAccident()">🚨 Incident</button>
+    <div id="sharerStatus" class="status"></div>
+    <div class="log" id="sharerLog"></div>
+  </div>
+
+  <div id="tracker" class="section active">
+    <h2>Mode Suiveur</h2>
+    <input id="tripCode" placeholder="Code trajet" style="padding:12px;width:220px;">
+    <button onclick="startFollowing()">Suivre</button>
+    <div id="map"></div>
+    <div id="trackerInfo" class="status"></div>
+    <div class="log" id="trackerLog"></div>
+  </div>
 
   <script>
     const firebaseConfig = {
-  apiKey: "AIzaSyBuaqrHLClg9dDCL0bPIowhVMcNvwmkjVE",
-  authDomain: "suivi-geoloc.firebaseapp.com",
-  databaseURL: "https://suivi-geoloc-default-rtdb.europe-west1.firebasedatabase.app",
-  projectId: "suivi-geoloc",
-  storageBucket: "suivi-geoloc.firebasestorage.app",
-  messagingSenderId: "257220080213",
-  appId: "1:257220080213:web:f9a5289c4b07edfc945adc",
-  measurementId: "G-LM77YZ9FD4"
-};
+      apiKey: "AIzaSyBuaqrHLClg9dDCL0bPIowhVMcNvwmkjVE",
+      authDomain: "suivi-geoloc.firebaseapp.com",
+      databaseURL: "https://suivi-geoloc-default-rtdb.europe-west1.firebasedatabase.app",
+      projectId: "suivi-geoloc",
+      storageBucket: "suivi-geoloc.firebasestorage.app",
+      messagingSenderId: "257220080213",
+      appId: "1:257220080213:web:f9a5289c4b07edfc945adc"
+    };
 
     firebase.initializeApp(firebaseConfig);
     const db = firebase.database();
 
-    let tripId = null;
+    let tripId = null, watchId = null, map, marker;
 
-    function log(msg) {
-      document.getElementById('log').innerHTML += new Date().toLocaleTimeString() + " | " + msg + "\n";
+    function showSection(s) {
+      document.querySelectorAll('.section').forEach(el => el.style.display = 'none');
+      document.getElementById(s).style.display = 'block';
     }
 
-    function startTest() {
-      tripId = "TEST" + Math.floor(Math.random()*10000);
-      log("Code généré : " + tripId);
+    function log(id, msg) {
+      const el = document.getElementById(id);
+      el.innerHTML += new Date().toLocaleTimeString() + " | " + msg + "<br>";
+      el.scrollTop = el.scrollHeight;
+    }
 
-      navigator.geolocation.getCurrentPosition(pos => {
-        const {latitude, longitude} = pos.coords;
-        log(`Position obtenue : ${latitude}, ${longitude}`);
+    function startTrip() {
+      tripId = Math.random().toString(36).substring(2,8).toUpperCase();
+      document.getElementById('sharerStatus').innerHTML = `Code : <b>${tripId}</b> - Partage-le !`;
+      log('sharerLog', 'Trajet démarré');
 
-        db.ref('trips/' + tripId).set({
+      watchId = navigator.geolocation.watchPosition(pos => {
+        const {latitude, longitude, accuracy} = pos.coords;
+        log('sharerLog', `Position : ${latitude.toFixed(5)}, ${longitude.toFixed(5)}`);
+
+        db.ref('trips/' + tripId).update({
           lat: latitude,
           lng: longitude,
+          accuracy: Math.round(accuracy),
           timestamp: Date.now()
-        }).then(() => log("✅ Données envoyées sur Firebase"))
-          .catch(err => log("❌ Erreur Firebase: " + err.message));
-      }, err => {
-        log("❌ Erreur Géolocalisation: " + err.message);
-      }, { enableHighAccuracy: true });
+        });
+      }, err => log('sharerLog', 'Erreur géoloc: ' + err.message), 
+      {enableHighAccuracy: true});
+    }
+
+    function startFollowing() {
+      const code = document.getElementById('tripCode').value.trim().toUpperCase();
+      if (!code) return alert("Entre le code");
+
+      if (!map) {
+        map = L.map('map').setView([46.5, 2.2], 9);
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
+      }
+
+      db.ref('trips/' + code).on('value', snap => {
+        const d = snap.val();
+        if (!d || !d.lat) return log('trackerLog', 'En attente de position...');
+
+        log('trackerLog', 'Position reçue !');
+
+        if (!marker) marker = L.marker([d.lat, d.lng]).addTo(map).bindPopup("Ami").openPopup();
+        else marker.setLatLng([d.lat, d.lng]);
+
+        map.setView([d.lat, d.lng], 15);
+      });
+    }
+
+    function endTrip() {
+      if (tripId) db.ref('trips/' + tripId).update({status: 'arrive'});
+    }
+
+    function reportAccident() {
+      alert("Incident signalé (version simplifiée)");
+      if (tripId) db.ref('trips/' + tripId).update({alert: "Incident signalé"});
     }
   </script>
 </body>
