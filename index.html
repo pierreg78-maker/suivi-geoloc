@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Suivi Vélo - Optimisé Mobile</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-database-compat.js"></script>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 0; padding: 10px; background: #f8f9fa; }
+    #map { height: 65vh; width: 100%; border-radius: 12px; }
+    button { padding: 14px 18px; margin: 6px 4px; font-size: 17px; border-radius: 10px; }
+    .status { padding: 12px; border-radius: 10px; margin: 10px 0; font-weight: bold; }
+    .log { max-height: 180px; overflow-y: auto; background: #fff; padding: 12px; border-radius: 10px; border: 1px solid #ddd; }
+  </style>
+</head>
+<body>
+  <h1>🚴 Suivi Vélo Optimisé</h1>
+
+  <button onclick="showSection('sharer')">Je suis le cycliste</button>
+  <button onclick="showSection('tracker')">Suivre mon ami</button>
+
+  <!-- CYCLISTE -->
+  <div id="sharer" class="section">
+    <h2>🚴 Mode Cycliste</h2>
+    <button onclick="startOptimizedTracking()">🚀 Top Départ</button>
+    <button onclick="endTrip()">🏁 Arrivée</button>
+    <button onclick="reportAccident()">🚨 Incident</button>
+    
+    <div id="sharerStatus" class="status"></div>
+    <div class="log" id="sharerLog"></div>
+  </div>
+
+  <!-- SUIVEUR -->
+  <div id="tracker" class="section active">
+    <h2>👀 Mode Suiveur</h2>
+    <input type="text" id="tripCode" placeholder="Code trajet (ex: ABC123)" style="width:240px;padding:12px;font-size:16px;">
+    <button onclick="startTracking()">Suivre</button>
+    
+    <div id="map"></div>
+    <div id="trackerInfo" class="status"></div>
+    <div class="log" id="trackerLog"></div>
+  </div>
+
+  <script>
+    // ================== CONFIG FIREBASE ==================
+    const firebaseConfig = { /* Remplace par ta config */ };
+    firebase.initializeApp(firebaseConfig);
+    const db = firebase.database();
+
+    let map, marker, tripId = null, watchId = null;
+    let lastSentTime = 0;
+
+    const CONFIG = {
+      minInterval: 15000,        // 15 secondes minimum entre envois (bon compromis vélo)
+      highAccuracy: true,
+      timeout: 10000,
+      maximumAge: 5000
+    };
+
+    function showSection(s) {
+      document.querySelectorAll('.section').forEach(sec => sec.classList.remove('active'));
+      document.getElementById(s).classList.add('active');
+    }
+
+    function logSharer(msg) {
+      const logEl = document.getElementById('sharerLog');
+      logEl.innerHTML += `<div>${new Date().toLocaleTimeString()} — ${msg}</div>`;
+      logEl.scrollTop = logEl.scrollHeight;
+    }
+
+    // ================== TRACKING OPTIMISÉ MOBILE ==================
+    function startOptimizedTracking() {
+      if (watchId) return;
+
+      tripId = Math.random().toString(36).substring(2, 8).toUpperCase();
+      
+      document.getElementById('sharerStatus').innerHTML = `
+        Trajet <strong>${tripId}</strong> démarré<br>
+        <small>Envoi optimisé toutes les ~15s (économie batterie)</small>
+      `;
+
+      logSharer("watchPosition activé - mode optimisé vélo");
+
+      watchId = navigator.geolocation.watchPosition(
+        (pos) => {
+          const { latitude, longitude, accuracy, speed, altitude } = pos.coords;
+          const now = Date.now();
+
+          // Filtre intelligent : on envoie seulement si intervalle écoulé OU mouvement significatif
+          if (now - lastSentTime < CONFIG.minInterval) return;
+
+          lastSentTime = now;
+
+          db.ref('trips/' + tripId).update({
+            lat: latitude,
+            lng: longitude,
+            accuracy: Math.round(accuracy),
+            speed: speed ? (speed * 3.6).toFixed(1) : null,
+            altitude: altitude ? Math.round(altitude) : null,
+            timestamp: now,
+            status: 'en_route',
+            battery: navigator.getBattery ? 'pending' : null
+          });
+
+          logSharer(`📍 ${latitude.toFixed(5)}, ${longitude.toFixed(5)} (±${Math.round(accuracy)}m)`);
+        },
+        (err) => {
+          logSharer(`❌ Erreur géoloc : ${err.message} (code ${err.code})`);
+        },
+        {
+          enableHighAccuracy: CONFIG.highAccuracy,   // GPS précis
+          timeout: CONFIG.timeout,
+          maximumAge: CONFIG.maximumAge
+        }
+      );
+    }
+
+    function endTrip() {
+      if (tripId) {
+        db.ref('trips/' + tripId).update({ status: 'arrive', timestamp: Date.now() });
+      }
+      stopTracking();
+      alert("🏁 Arrivée signalée");
+    }
+
+    function stopTracking() {
+      if (watchId) {
+        navigator.geolocation.clearWatch(watchId);
+        watchId = null;
+      }
+    }
+
+    function reportAccident() {
+      if (!tripId) return;
+      const type = prompt("1 = Accident grave\n2 = Chute légère\n3 = Crevaison / Technique");
+      if (!type) return;
+
+      let msg = type === "1" ? "🚨 ACCIDENT GRAVE" : 
+                type === "2" ? "Chute légère" : "Problème technique";
+
+      if (type === "1" && confirm("Appeler le 18 ?")) window.location.href = "tel:18";
+
+      db.ref('trips/' + tripId).update({ alert: msg, timestamp: Date.now() });
+      logSharer("🚨 Alerte envoyée : " + msg);
+    }
+
+    // ================== MODE SUIVEUR ==================
+    function startTracking() {
+      const code = document.getElementById('tripCode').value.trim().toUpperCase();
+      if (!code) return alert("Code requis");
+
+      if (!map) {
+        map = L.map('map').setView([46.5, 2.2], 9);
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+          attribution: '© OpenStreetMap'
+        }).addTo(map);
+      }
+
+      if (window.currentRef) window.currentRef.off();
+
+      window.currentRef = db.ref('trips/' + code);
+      window.currentRef.on('value', snap => {
+        const d = snap.val();
+        if (!d?.lat) return;
+
+        document.getElementById('trackerInfo').innerHTML = `
+          Mis à jour : ${new Date(d.timestamp).toLocaleTimeString()}<br>
+          Précision ±${d.accuracy || '?'}m | ${d.speed ? d.speed + ' km/h' : ''}
+        `;
+
+        if (d.alert) {
+          document.getElementById('trackerLog').innerHTML += 
+            `<div style="color:red">${new Date().toLocaleTimeString()} — ${d.alert}</div>`;
+        }
+
+        if (!marker) {
+          marker = L.marker([d.lat, d.lng]).addTo(map).bindPopup("Ami").openPopup();
+        } else {
+          marker.setLatLng([d.lat, d.lng]);
+        }
+        map.setView([d.lat, d.lng], 15);
+      });
+    }
+
+    // Nettoyage
+    window.onbeforeunload = () => { stopTracking(); };
+  </script>
+</body>
+</html>
